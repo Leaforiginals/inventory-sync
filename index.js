@@ -28,16 +28,17 @@ app.post("/webhook", async (req, res) => {
       const qty = variant.inventory_quantity;
 
       console.log("Leaf SKU =", sku);
-      console.log("Quantity =", qty);
+      console.log("Searching SKU:", sku);
+      console.log("Quantity:", qty);
 
-      const response = await axios.get(
-        `https://${process.env.SOOHI_STORE_URL}/admin/api/2025-07/products.json?limit=250`,
-        {
-          headers: {
-            "X-Shopify-Access-Token": process.env.SOOHI_ACCESS_TOKEN
-          }
-        }
-      );
+ const response = await axios.get(
+  `https://${process.env.SOOHI_STORE_URL}/admin/api/2025-07/products.json?limit=250`,
+  {
+    headers: {
+      "X-Shopify-Access-Token": process.env.SOOHI_ACCESS_TOKEN
+    }
+  }
+);
 
       let matchedVariant = null;
 
