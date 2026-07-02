@@ -1,129 +1,106 @@
-require("dotenv").config();
-
-const express = require("express");
-const axios = require("axios");
-
+const express = require('express');
+const axios = require('axios');
 const app = express();
+
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Inventory Sync Server Running");
+// CONFIGURATION: Apne dono stores ki details yahan bhariye
+const STORES = {
+    leaf: {
+        shopName: 'YOUR_LEAF_ORIGINALS_STORE_NAME.myshopify.com',
+        token: 'YOUR_LEAF_ORIGINALS_ADMIN_API_TOKEN'
+    },
+    soohi: {
+        shopName: 'YOUR_SOOHI_STORE_NAME.myshopify.com',
+        token: 'YOUR_SOOHI_ADMIN_API_TOKEN'
+    }
+};
+
+// Common function dusre store mein SKU ke mutabik stock update karne ke liye
+async function updateTargetStore(targetStore, sku, newInventory) {
+    const config = {
+        headers: {
+            'X-Shopify-Access-Token': targetStore.token,
+            'Content-Type': 'application/json'
+        }
+    };
+
+    try {
+        // 1. SKU ke zariye target store mein Inventory Item ID dhoondhein
+        const searchUrl = `https://${targetStore.shopName}/admin/api/2024-04/products.json?sku=${sku}`;
+        const searchRes = await axios.get(searchUrl, config);
+        
+        // Pure store mein find karein kaun sa variant is SKU se match karta hai
+        let inventoryItemId = null;
+        let currentAvailable = null;
+        let locationId = null;
+
+        // Yahan hum product variants ko scan karke target inventoryItemId nikalenge
+        for (let product of searchRes.data.products) {
+            for (let variant of product.variants) {
+                if (variant.sku === sku) {
+                    inventoryItemId = variant.inventory_item_id;
+                    break;
+                }
+            }
+        }
+
+        if (!inventoryItemId) {
+            console.log(`SKU ${sku} target store mein nahi mila.`);
+            return;
+        }
+
+        // 2. Target store ki pehli Location ID aur current stock nikalne ke liye request
+        const inventoryUrl = `https://${targetStore.shopName}/admin/api/2024-04/inventory_levels.json?inventory_item_ids=${inventoryItemId}`;
+        const invRes = await axios.get(inventoryUrl, config);
+        
+        if (invRes.data.inventory_levels.length > 0) {
+            locationId = invRes.data.inventory_levels[0].location_id;
+            currentAvailable = invRes.data.inventory_levels[0].available;
+        }
+
+        // ⭐ LOOP PREVENTER: Agar target store ka stock pehle se hi same hai, toh aage mat badho!
+        if (currentAvailable === newInventory) {
+            console.log(`Loop Blocked: SKU ${sku} ka stock pehle se hi ${newInventory} hai.`);
+            return;
+        }
+
+        // 3. Agar stock alag hai, toh use set (sync) kar do
+        const setUrl = `https://${targetStore.shopName}/admin/api/2024-04/inventory_levels/set.json`;
+        await axios.post(setUrl, {
+            location_id: locationId,
+            inventory_item_id: inventoryItemId,
+            available: newInventory
+        }, config);
+
+        console.log(`Successfully Synced: SKU ${sku} updated to ${newInventory}`);
+
+    } catch (error) {
+        console.error("Sync Error:", error.response ? error.response.data : error.message);
+    }
+}
+
+// 🟢 Route 1: Jab Leaf Originals mein change ho (Updates Soohi.in)
+app.post('/webhook/leaf', async (req, res) => {
+    res.sendStatus(200); // Shopify ko turant OK bolo taaki woh wait na kare
+    
+    const { sku, inventory_quantity } = req.body; // Shopify Webhook data
+    if (!sku) return;
+
+    console.log(`Leaf Originals updated: SKU ${sku} -> Qty ${inventory_quantity}`);
+    await updateTargetStore(STORES.soohi, sku, inventory_quantity);
 });
 
-app.post("/webhook", async (req, res) => {
-  try {
-    console.log("========== WEBHOOK RECEIVED ==========");
-
-    const product = req.body;
-
-    console.log("Leaf Product:", product.title);
-
-    if (!product.variants) {
-      console.log("No variants found.");
-      return res.sendStatus(200);
-    }
-
-    console.log("=== ENV CHECK ===");
-    console.log("STORE =", process.env.SOOHI_STORE_URL);
-    console.log("TOKEN EXISTS =", !!process.env.SOOHI_ACCESS_TOKEN);
-    console.log(
-      "TOKEN PREFIX =",
-      process.env.SOOHI_ACCESS_TOKEN
-        ? process.env.SOOHI_ACCESS_TOKEN.substring(0, 10)
-        : "NOT FOUND"
-    );
-
-    const response = await axios.get(
-      `https://${process.env.SOOHI_STORE_URL}/admin/api/2025-07/products.json?limit=250`,
-      {
-        headers: {
-          "X-Shopify-Access-Token": process.env.SOOHI_ACCESS_TOKEN,
-        },
-      }
-    );
-
-    for (const variant of product.variants) {
-      const sku = variant.sku;
-      const qty = variant.inventory_quantity;
-
-      console.log("--------------------------------");
-      console.log("Searching SKU:", sku);
-      console.log("Quantity:", qty);
-
-      let matchedVariant = null;
-
-      for (const p of response.data.products) {
-        for (const v of p.variants) {
-          if (v.sku === sku) {
-            matchedVariant = v;
-            break;
-          }
-        }
-
-        if (matchedVariant) break;
-      }
-
-      if (!matchedVariant) {
-        console.log("SKU NOT FOUND:", sku);
-        continue;
-      }
-
-      console.log("SKU FOUND");
-
-      const inventoryItemId = matchedVariant.inventory_item_id;
-
-      const levelResponse = await axios.get(
-        `https://${process.env.SOOHI_STORE_URL}/admin/api/2025-07/inventory_levels.json?inventory_item_ids=${inventoryItemId}`,
-        {
-          headers: {
-            "X-Shopify-Access-Token": process.env.SOOHI_ACCESS_TOKEN,
-          },
-        }
-      );
-
-      if (levelResponse.data.inventory_levels.length === 0) {
-        console.log("Inventory level not found.");
-        continue;
-      }
-
-      const locationId =
-        levelResponse.data.inventory_levels[0].location_id;
-
-      await axios.post(
-        `https://${process.env.SOOHI_STORE_URL}/admin/api/2025-07/inventory_levels/set.json`,
-        {
-          location_id: locationId,
-          inventory_item_id: inventoryItemId,
-          available: qty,
-        },
-        {
-          headers: {
-            "X-Shopify-Access-Token": process.env.SOOHI_ACCESS_TOKEN,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      console.log(`Updated SKU ${sku} → ${qty}`);
-    }
-
+// 🔵 Route 2: Jab Soohi.in mein change ho (Updates Leaf Originals)
+app.post('/webhook/soohi', async (req, res) => {
     res.sendStatus(200);
-  } catch (error) {
-    console.log("========== ERROR ==========");
+    
+    const { sku, inventory_quantity } = req.body;
+    if (!sku) return;
 
-    if (error.response) {
-      console.log(error.response.status);
-      console.log(error.response.data);
-    } else {
-      console.log(error.message);
-    }
-
-    res.sendStatus(500);
-  }
+    console.log(`Soohi.in updated: SKU ${sku} -> Qty ${inventory_quantity}`);
+    await updateTargetStore(STORES.leaf, sku, inventory_quantity);
 });
 
 const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Sync Server running on port ${PORT}`));
