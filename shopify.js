@@ -103,7 +103,82 @@ async function updateInventory(shop, token, inventoryItemId, locationId, quantit
 
   return response.data.inventorySetQuantities.inventoryAdjustmentGroup;
 }
+// ================================
+// Update Product Status (Active/Draft)
+// ================================
+async function updateProductStatus(shop, token, productId, status) {
+  const mutation = `
+    mutation productUpdate($product: ProductUpdateInput!) {
+      productUpdate(product: $product) {
+        product {
+          id
+          status
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
 
+  const variables = {
+    product: {
+      id: productId,
+      status,
+    },
+  };
+
+  const response = await graphqlRequest(shop, token, mutation, variables);
+
+  if (response.errors) {
+    throw new Error(response.errors.map((e) => e.message).join("\n"));
+  }
+
+  const userErrors = response.data?.productUpdate?.userErrors;
+  if (userErrors && userErrors.length > 0) {
+    throw new Error(userErrors.map((e) => e.message).join("\n"));
+  }
+
+  return response.data.productUpdate.product;
+}
+
+// ================================
+// Delete Product Variants
+// ================================
+async function deleteVariants(shop, token, productId, variantIds) {
+  const mutation = `
+    mutation productVariantsBulkDelete($productId: ID!, $variantsIds: [ID!]!) {
+      productVariantsBulkDelete(productId: $productId, variantsIds: $variantsIds) {
+        product {
+          id
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+  `;
+
+  const variables = {
+    productId,
+    variantsIds: variantIds,
+  };
+
+  const response = await graphqlRequest(shop, token, mutation, variables);
+
+  if (response.errors) {
+    throw new Error(response.errors.map((e) => e.message).join("\n"));
+  }
+
+  const userErrors = response.data?.productVariantsBulkDelete?.userErrors;
+  if (userErrors && userErrors.length > 0) {
+    throw new Error(userErrors.map((e) => e.message).join("\n"));
+  }
+
+  return response.data.productVariantsBulkDelete.product;
+}
 module.exports = {
   getAccessToken,
   graphqlRequest,

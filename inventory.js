@@ -21,7 +21,8 @@ async function getInventory(shop, token, locationId) {
               title
               sku
 
-              product {
+             product {
+                id
                 title
               }
 
@@ -69,7 +70,8 @@ async function getInventory(shop, token, locationId) {
         ? level.quantities.find((item) => item.name === "available")?.quantity ?? 0
         : null;
 
-      inventory.push({
+     inventory.push({
+        productId: variant.product.id,
         productTitle: variant.product.title,
         variantTitle: variant.title,
         variantId: variant.id,
@@ -78,7 +80,6 @@ async function getInventory(shop, token, locationId) {
         tracked: variant.inventoryItem.tracked,
         availableQuantity,
       });
-    }
 
     hasNextPage = result.pageInfo.hasNextPage;
     cursor = result.pageInfo.endCursor;

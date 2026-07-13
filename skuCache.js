@@ -5,6 +5,8 @@ const cache = {
   leafByItemId: new Map(),
   soohiBySku: new Map(),
   soohiByItemId: new Map(),
+  leafProductSkus: new Map(),
+  soohiProductSkus: new Map(),
 };
 
 async function buildCache(
@@ -24,6 +26,8 @@ async function buildCache(
   cache.leafByItemId.clear();
   cache.soohiBySku.clear();
   cache.soohiByItemId.clear();
+  cache.leafProductSkus.clear();
+  cache.soohiProductSkus.clear();
 
   for (const item of leafInventory) {
     if (!item.sku || item.sku.trim() === "") continue;
@@ -32,8 +36,15 @@ async function buildCache(
     cache.leafBySku.set(sku, {
       inventoryItemId: item.inventoryItemId,
       locationId: leafLocationId,
+      productId: item.productId,
+      variantId: item.variantId,
     });
     cache.leafByItemId.set(item.inventoryItemId, sku);
+
+    if (!cache.leafProductSkus.has(item.productId)) {
+      cache.leafProductSkus.set(item.productId, new Set());
+    }
+    cache.leafProductSkus.get(item.productId).add(sku);
   }
 
   for (const item of soohiInventory) {
@@ -43,8 +54,15 @@ async function buildCache(
     cache.soohiBySku.set(sku, {
       inventoryItemId: item.inventoryItemId,
       locationId: soohiLocationId,
+      productId: item.productId,
+      variantId: item.variantId,
     });
     cache.soohiByItemId.set(item.inventoryItemId, sku);
+
+    if (!cache.soohiProductSkus.has(item.productId)) {
+      cache.soohiProductSkus.set(item.productId, new Set());
+    }
+    cache.soohiProductSkus.get(item.productId).add(sku);
   }
 
   console.log(
@@ -68,10 +86,20 @@ function getLeafTargetBySku(sku) {
   return cache.leafBySku.get(sku);
 }
 
+function getLeafProductSkus(productId) {
+  return cache.leafProductSkus.get(productId) || new Set();
+}
+
+function getSoohiProductSkus(productId) {
+  return cache.soohiProductSkus.get(productId) || new Set();
+}
+
 module.exports = {
   buildCache,
   getSkuByLeafItemId,
   getSkuBySoohiItemId,
   getSoohiTargetBySku,
   getLeafTargetBySku,
+  getLeafProductSkus,
+  getSoohiProductSkus,
 };

@@ -52,6 +52,14 @@ async function main() {
     `${RENDER_URL}/webhooks/leaf`
   );
 
+  console.log("Registering Leaf product webhook...");
+  await registerWebhook(
+    process.env.LEAF_SHOP,
+    leafToken,
+    "PRODUCTS_UPDATE",
+    `${RENDER_URL}/webhooks/leaf-product`
+  );
+
   const soohiToken = await getAccessToken(
     process.env.SOOHI_SHOP,
     process.env.SOOHI_CLIENT_ID,
@@ -64,6 +72,14 @@ async function main() {
     soohiToken,
     "INVENTORY_LEVELS_UPDATE",
     `${RENDER_URL}/webhooks/soohi`
+  );
+
+  console.log("Registering Soohi product webhook...");
+  await registerWebhook(
+    process.env.SOOHI_SHOP,
+    soohiToken,
+    "PRODUCTS_UPDATE",
+    `${RENDER_URL}/webhooks/soohi-product`
   );
 }
 

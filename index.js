@@ -2,27 +2,26 @@ require("dotenv").config();
 const express = require("express");
 const crypto = require("crypto");
 
-const { getAccessToken, updateInventory } = require("./shopify");
+const { getAccessToken, updateInventory, updateProductStatus, deleteVariants } = require("./shopify");
 const {
   buildCache,
   getSkuByLeafItemId,
   getSkuBySoohiItemId,
   getSoohiTargetBySku,
   getLeafTargetBySku,
+  getLeafProductSkus,
+  getSoohiProductSkus,
 } = require("./skuCache");
 
 const app = express();
 
-// Raw body chahiye HMAC verify karne ke liye — isliye express.json() nahi, raw parser use kar rahe hain
 app.use(express.raw({ type: "application/json" }));
 
 let leafToken = null;
 let soohiToken = null;
 
-// Recently-synced tracker — infinite loop rokne ke liye
-// key: "leaf:SKU123" ya "soohi:SKU123", value: { quantity, time }
 const recentlySynced = new Map();
-const SYNC_IGNORE_WINDOW_MS = 15000; // 15 second
+const SYNC_IGNORE_WINDOW_MS = 15000;
 
 function markSynced(store, sku, quantity) {
   recentlySynced.set(`${store}:${sku}`, { quantity, time: Date.now() });
@@ -41,7 +40,7 @@ function verifyShopifyWebhook(req, secret) {
 
   const generatedHash = crypto
     .createHmac("sha256", secret)
-    .update(req.body) // raw buffer
+    .update(req.body)
     .digest("base64");
 
   return crypto.timingSafeEqual(
@@ -51,10 +50,10 @@ function verifyShopifyWebhook(req, secret) {
 }
 
 // ================================
-// Leaf → Soohi
+// Leaf → Soohi (Inventory)
 // ================================
 app.post("/webhooks/leaf", async (req, res) => {
-  res.status(200).send("ok"); // Shopify ko turant respond karo, baaki kaam background mein
+  res.status(200).send("ok");
 
   try {
     const isValid = verifyShopifyWebhook(req, process.env.LEAF_CLIENT_SECRET);
@@ -101,7 +100,7 @@ app.post("/webhooks/leaf", async (req, res) => {
 });
 
 // ================================
-// Soohi → Leaf
+// Soohi → Leaf (Inventory)
 // ================================
 app.post("/webhooks/soohi", async (req, res) => {
   res.status(200).send("ok");
@@ -151,6 +150,150 @@ app.post("/webhooks/soohi", async (req, res) => {
 });
 
 // ================================
+// Leaf Product Update (status + variant delete)
+// ================================
+app.post("/webhooks/leaf-product", async (req, res) => {
+  res.status(200).send("ok");
+
+  try {
+    const isValid = verifyShopifyWebhook(req, process.env.LEAF_CLIENT_SECRET);
+    if (!isValid) {
+      console.log("❌ Invalid webhook signature (Leaf product)");
+      return;
+    }
+
+    const payload = JSON.parse(req.body.toString());
+    const productId = `gid://shopify/Product/${payload.id}`;
+    const status = payload.status.toUpperCase();
+
+    const currentSkus = new Set(
+      payload.variants
+        .filter((v) => v.sku && v.sku.trim() !== "")
+        .map((v) => v.sku.trim().toUpperCase())
+    );
+
+    const previousSkus = getLeafProductSkus(productId);
+    const deletedSkus = [...previousSkus].filter((sku) => !currentSkus.has(sku));
+
+    if (deletedSkus.length > 0) {
+      console.log(`🗑️ Detected deleted SKUs on Leaf: ${deletedSkus.join(", ")}`);
+
+      const bySoohiProduct = new Map();
+      for (const sku of deletedSkus) {
+        const target = getSoohiTargetBySku(sku);
+        if (!target) continue;
+        if (!bySoohiProduct.has(target.productId)) {
+          bySoohiProduct.set(target.productId, []);
+        }
+        bySoohiProduct.get(target.productId).push(target);
+      }
+
+      for (const [soohiProductId, targets] of bySoohiProduct.entries()) {
+        try {
+          const variantIds = targets.map((t) => t.variantId).filter(Boolean);
+          if (variantIds.length > 0) {
+            await deleteVariants(process.env.SOOHI_SHOP, soohiToken, soohiProductId, variantIds);
+            console.log(`✅ Deleted ${variantIds.length} variant(s) on Soohi`);
+          }
+        } catch (err) {
+          console.log("❌ Error deleting Soohi variants:", err.message);
+        }
+      }
+    }
+
+    let soohiProductId = null;
+    for (const sku of currentSkus) {
+      const target = getSoohiTargetBySku(sku);
+      if (target) {
+        soohiProductId = target.productId;
+        break;
+      }
+    }
+
+    if (soohiProductId) {
+      await updateProductStatus(process.env.SOOHI_SHOP, soohiToken, soohiProductId, status);
+      console.log(`✅ Synced status to Soohi: ${status}`);
+    } else {
+      console.log("⚠️ Could not find matching Soohi product for status sync");
+    }
+  } catch (err) {
+    console.log("❌ Error in Leaf product webhook:", err.message);
+  }
+});
+
+// ================================
+// Soohi Product Update (status + variant delete)
+// ================================
+app.post("/webhooks/soohi-product", async (req, res) => {
+  res.status(200).send("ok");
+
+  try {
+    const isValid = verifyShopifyWebhook(req, process.env.SOOHI_CLIENT_SECRET);
+    if (!isValid) {
+      console.log("❌ Invalid webhook signature (Soohi product)");
+      return;
+    }
+
+    const payload = JSON.parse(req.body.toString());
+    const productId = `gid://shopify/Product/${payload.id}`;
+    const status = payload.status.toUpperCase();
+
+    const currentSkus = new Set(
+      payload.variants
+        .filter((v) => v.sku && v.sku.trim() !== "")
+        .map((v) => v.sku.trim().toUpperCase())
+    );
+
+    const previousSkus = getSoohiProductSkus(productId);
+    const deletedSkus = [...previousSkus].filter((sku) => !currentSkus.has(sku));
+
+    if (deletedSkus.length > 0) {
+      console.log(`🗑️ Detected deleted SKUs on Soohi: ${deletedSkus.join(", ")}`);
+
+      const byLeafProduct = new Map();
+      for (const sku of deletedSkus) {
+        const target = getLeafTargetBySku(sku);
+        if (!target) continue;
+        if (!byLeafProduct.has(target.productId)) {
+          byLeafProduct.set(target.productId, []);
+        }
+        byLeafProduct.get(target.productId).push(target);
+      }
+
+      for (const [leafProductId, targets] of byLeafProduct.entries()) {
+        try {
+          const variantIds = targets.map((t) => t.variantId).filter(Boolean);
+          if (variantIds.length > 0) {
+            await deleteVariants(process.env.LEAF_SHOP, leafToken, leafProductId, variantIds);
+            console.log(`✅ Deleted ${variantIds.length} variant(s) on Leaf`);
+          }
+        } catch (err) {
+          console.log("❌ Error deleting Leaf variants:", err.message);
+        }
+      }
+    }
+
+    let leafProductId = null;
+    for (const sku of currentSkus) {
+      const target = getLeafTargetBySku(sku);
+      if (target) {
+        leafProductId = target.productId;
+        break;
+      }
+    }
+
+    if (leafProductId) {
+      await updateProductStatus(process.env.LEAF_SHOP, leafToken, leafProductId, status);
+      console.log(`✅ Synced status to Leaf: ${status}`);
+    } else {
+      console.log("⚠️ Could not find matching Leaf product for status sync");
+    }
+  } catch (err) {
+    console.log("❌ Error in Soohi product webhook:", err.message);
+  }
+});
+
+// ================================
 // Manual Cache Refresh
 // ================================
 app.get("/refresh-cache", async (req, res) => {
@@ -168,6 +311,10 @@ app.get("/refresh-cache", async (req, res) => {
     res.status(500).send("❌ Cache refresh failed: " + err.message);
   }
 });
+
+// ================================
+// Startup
+// ================================
 async function start() {
   console.log("======================================");
   console.log(" Leaf ↔ Soohi Inventory Sync Server");
@@ -196,7 +343,6 @@ async function start() {
     process.env.SOOHI_LOCATION_ID
   );
 
-  // Har 6 ghante mein cache refresh (naye products add hone ki wajah se)
   setInterval(() => {
     buildCache(
       process.env.LEAF_SHOP,
