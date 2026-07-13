@@ -151,8 +151,23 @@ app.post("/webhooks/soohi", async (req, res) => {
 });
 
 // ================================
-// Startup
+// Manual Cache Refresh
 // ================================
+app.get("/refresh-cache", async (req, res) => {
+  try {
+    await buildCache(
+      process.env.LEAF_SHOP,
+      leafToken,
+      process.env.LEAF_LOCATION_ID,
+      process.env.SOOHI_SHOP,
+      soohiToken,
+      process.env.SOOHI_LOCATION_ID
+    );
+    res.status(200).send("✅ Cache refreshed successfully");
+  } catch (err) {
+    res.status(500).send("❌ Cache refresh failed: " + err.message);
+  }
+});
 async function start() {
   console.log("======================================");
   console.log(" Leaf ↔ Soohi Inventory Sync Server");

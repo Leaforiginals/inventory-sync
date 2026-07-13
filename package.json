@@ -14,5 +14,13 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-cron": "^4.6.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Leaforiginals/inventory-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Leaforiginals/inventory-sync/issues"
+  },
+  "homepage": "https://github.com/Leaforiginals/inventory-sync#readme"
 }
