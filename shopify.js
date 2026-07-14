@@ -183,4 +183,6 @@ module.exports = {
   getAccessToken,
   graphqlRequest,
   updateInventory,
+   updateProductStatus,
+  deleteVariants,
 };
