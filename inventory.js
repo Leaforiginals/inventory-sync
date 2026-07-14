@@ -70,7 +70,7 @@ async function getInventory(shop, token, locationId) {
         ? level.quantities.find((item) => item.name === "available")?.quantity ?? 0
         : null;
 
-     inventory.push({inventory.push({
+     inventory.push({
         productId: variant.product.id,
         productTitle: variant.product.title,
         variantTitle: variant.title,
