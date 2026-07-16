@@ -2,7 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const crypto = require("crypto");
 
-const { getAccessToken, updateInventory, updateProductStatus, deleteVariants } = require("./shopify");
+const { getAccessToken, updateInventory, updateProductStatus, deleteVariants, createVariantOnProduct, createNewProduct } = require("./shopify");
 const {
   buildCache,
   getSkuByLeafItemId,
@@ -150,7 +150,7 @@ app.post("/webhooks/soohi", async (req, res) => {
 });
 
 // ================================
-// Leaf Product Update (status + variant delete)
+// Leaf Product Update (status + variant delete + variant/product create)
 // ================================
 app.post("/webhooks/leaf-product", async (req, res) => {
   res.status(200).send("ok");
@@ -174,6 +174,7 @@ app.post("/webhooks/leaf-product", async (req, res) => {
 
     const previousSkus = getLeafProductSkus(productId);
     const deletedSkus = [...previousSkus].filter((sku) => !currentSkus.has(sku));
+    const createdSkus = [...currentSkus].filter((sku) => !previousSkus.has(sku));
 
     if (deletedSkus.length > 0) {
       console.log(`🗑️ Detected deleted SKUs on Leaf: ${deletedSkus.join(", ")}`);
@@ -188,11 +189,11 @@ app.post("/webhooks/leaf-product", async (req, res) => {
         bySoohiProduct.get(target.productId).push(target);
       }
 
-      for (const [soohiProductId, targets] of bySoohiProduct.entries()) {
+      for (const [soohiProductIdToEdit, targets] of bySoohiProduct.entries()) {
         try {
           const variantIds = targets.map((t) => t.variantId).filter(Boolean);
           if (variantIds.length > 0) {
-            await deleteVariants(process.env.SOOHI_SHOP, soohiToken, soohiProductId, variantIds);
+            await deleteVariants(process.env.SOOHI_SHOP, soohiToken, soohiProductIdToEdit, variantIds);
             console.log(`✅ Deleted ${variantIds.length} variant(s) on Soohi`);
           }
         } catch (err) {
@@ -210,6 +211,53 @@ app.post("/webhooks/leaf-product", async (req, res) => {
       }
     }
 
+    if (createdSkus.length > 0) {
+      const optionName = payload.options && payload.options[0] ? payload.options[0].name : "Title";
+
+      if (previousSkus.size === 0) {
+        const variantsData = payload.variants
+          .filter((v) => v.sku && v.sku.trim() !== "")
+          .map((v) => ({
+            sku: v.sku.trim().toUpperCase(),
+            optionValue: v.option1,
+            quantity: v.inventory_quantity || 0,
+          }));
+
+        if (variantsData.length > 0) {
+          try {
+            const title = variantsData[0].sku;
+            await createNewProduct(process.env.SOOHI_SHOP, soohiToken, title, optionName, variantsData, process.env.SOOHI_LOCATION_ID);
+            console.log(`✅ Created new product on Soohi with ${variantsData.length} variant(s)`);
+          } catch (err) {
+            console.log("❌ Error creating new product on Soohi:", err.message);
+          }
+        }
+      } else if (soohiProductId) {
+        for (const sku of createdSkus) {
+          const variant = payload.variants.find((v) => v.sku && v.sku.trim().toUpperCase() === sku);
+          if (!variant) continue;
+
+          try {
+            await createVariantOnProduct(
+              process.env.SOOHI_SHOP,
+              soohiToken,
+              soohiProductId,
+              optionName,
+              variant.option1,
+              sku,
+              variant.inventory_quantity || 0,
+              process.env.SOOHI_LOCATION_ID
+            );
+            console.log(`✅ Created new variant on Soohi: ${sku}`);
+          } catch (err) {
+            console.log(`❌ Error creating variant ${sku} on Soohi:`, err.message);
+          }
+        }
+      } else {
+        console.log("⚠️ New variant(s) on Leaf but no matching Soohi product found — skipping");
+      }
+    }
+
     if (soohiProductId) {
       await updateProductStatus(process.env.SOOHI_SHOP, soohiToken, soohiProductId, status);
       console.log(`✅ Synced status to Soohi: ${status}`);
@@ -222,7 +270,7 @@ app.post("/webhooks/leaf-product", async (req, res) => {
 });
 
 // ================================
-// Soohi Product Update (status + variant delete)
+// Soohi Product Update (status + variant delete + variant/product create)
 // ================================
 app.post("/webhooks/soohi-product", async (req, res) => {
   res.status(200).send("ok");
@@ -246,6 +294,7 @@ app.post("/webhooks/soohi-product", async (req, res) => {
 
     const previousSkus = getSoohiProductSkus(productId);
     const deletedSkus = [...previousSkus].filter((sku) => !currentSkus.has(sku));
+    const createdSkus = [...currentSkus].filter((sku) => !previousSkus.has(sku));
 
     if (deletedSkus.length > 0) {
       console.log(`🗑️ Detected deleted SKUs on Soohi: ${deletedSkus.join(", ")}`);
@@ -260,11 +309,11 @@ app.post("/webhooks/soohi-product", async (req, res) => {
         byLeafProduct.get(target.productId).push(target);
       }
 
-      for (const [leafProductId, targets] of byLeafProduct.entries()) {
+      for (const [leafProductIdToEdit, targets] of byLeafProduct.entries()) {
         try {
           const variantIds = targets.map((t) => t.variantId).filter(Boolean);
           if (variantIds.length > 0) {
-            await deleteVariants(process.env.LEAF_SHOP, leafToken, leafProductId, variantIds);
+            await deleteVariants(process.env.LEAF_SHOP, leafToken, leafProductIdToEdit, variantIds);
             console.log(`✅ Deleted ${variantIds.length} variant(s) on Leaf`);
           }
         } catch (err) {
@@ -279,6 +328,53 @@ app.post("/webhooks/soohi-product", async (req, res) => {
       if (target) {
         leafProductId = target.productId;
         break;
+      }
+    }
+
+    if (createdSkus.length > 0) {
+      const optionName = payload.options && payload.options[0] ? payload.options[0].name : "Title";
+
+      if (previousSkus.size === 0) {
+        const variantsData = payload.variants
+          .filter((v) => v.sku && v.sku.trim() !== "")
+          .map((v) => ({
+            sku: v.sku.trim().toUpperCase(),
+            optionValue: v.option1,
+            quantity: v.inventory_quantity || 0,
+          }));
+
+        if (variantsData.length > 0) {
+          try {
+            const title = variantsData[0].sku;
+            await createNewProduct(process.env.LEAF_SHOP, leafToken, title, optionName, variantsData, process.env.LEAF_LOCATION_ID);
+            console.log(`✅ Created new product on Leaf with ${variantsData.length} variant(s)`);
+          } catch (err) {
+            console.log("❌ Error creating new product on Leaf:", err.message);
+          }
+        }
+      } else if (leafProductId) {
+        for (const sku of createdSkus) {
+          const variant = payload.variants.find((v) => v.sku && v.sku.trim().toUpperCase() === sku);
+          if (!variant) continue;
+
+          try {
+            await createVariantOnProduct(
+              process.env.LEAF_SHOP,
+              leafToken,
+              leafProductId,
+              optionName,
+              variant.option1,
+              sku,
+              variant.inventory_quantity || 0,
+              process.env.LEAF_LOCATION_ID
+            );
+            console.log(`✅ Created new variant on Leaf: ${sku}`);
+          } catch (err) {
+            console.log(`❌ Error creating variant ${sku} on Leaf:`, err.message);
+          }
+        }
+      } else {
+        console.log("⚠️ New variant(s) on Soohi but no matching Leaf product found — skipping");
       }
     }
 
