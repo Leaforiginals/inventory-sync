@@ -94,6 +94,28 @@ function getSoohiProductSkus(productId) {
   return cache.soohiProductSkus.get(productId) || new Set();
 }
 
+// ================================
+// Instantly add a new SKU mapping (used right after creating a variant/product)
+// so a follow-up inventory webhook doesn't miss it before the next full refresh
+// ================================
+function addLeafMapping(sku, inventoryItemId, locationId, productId, variantId) {
+  cache.leafBySku.set(sku, { inventoryItemId, locationId, productId, variantId });
+  cache.leafByItemId.set(inventoryItemId, sku);
+  if (!cache.leafProductSkus.has(productId)) {
+    cache.leafProductSkus.set(productId, new Set());
+  }
+  cache.leafProductSkus.get(productId).add(sku);
+}
+
+function addSoohiMapping(sku, inventoryItemId, locationId, productId, variantId) {
+  cache.soohiBySku.set(sku, { inventoryItemId, locationId, productId, variantId });
+  cache.soohiByItemId.set(inventoryItemId, sku);
+  if (!cache.soohiProductSkus.has(productId)) {
+    cache.soohiProductSkus.set(productId, new Set());
+  }
+  cache.soohiProductSkus.get(productId).add(sku);
+}
+
 module.exports = {
   buildCache,
   getSkuByLeafItemId,
@@ -102,4 +124,6 @@ module.exports = {
   getLeafTargetBySku,
   getLeafProductSkus,
   getSoohiProductSkus,
+  addLeafMapping,
+  addSoohiMapping,
 };

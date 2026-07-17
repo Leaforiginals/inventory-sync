@@ -11,6 +11,8 @@ const {
   getLeafTargetBySku,
   getLeafProductSkus,
   getSoohiProductSkus,
+  addLeafMapping,
+  addSoohiMapping,
 } = require("./skuCache");
 
 const app = express();
@@ -221,12 +223,35 @@ app.post("/webhooks/leaf-product", async (req, res) => {
             sku: v.sku.trim().toUpperCase(),
             optionValue: v.option1,
             quantity: v.inventory_quantity || 0,
+            rawVariant: v,
           }));
 
         if (variantsData.length > 0) {
           try {
             const title = variantsData[0].sku;
-            await createNewProduct(process.env.SOOHI_SHOP, soohiToken, title, optionName, variantsData, process.env.SOOHI_LOCATION_ID);
+            const result = await createNewProduct(process.env.SOOHI_SHOP, soohiToken, title, optionName, variantsData, process.env.SOOHI_LOCATION_ID);
+
+            for (let i = 0; i < result.variants.length; i++) {
+              const sku = variantsData[i].sku;
+              const rawVariant = variantsData[i].rawVariant;
+
+              addSoohiMapping(
+                sku,
+                result.variants[i].inventoryItem.id,
+                process.env.SOOHI_LOCATION_ID,
+                result.productId,
+                result.variants[i].id
+              );
+
+              addLeafMapping(
+                sku,
+                `gid://shopify/InventoryItem/${rawVariant.inventory_item_id}`,
+                process.env.LEAF_LOCATION_ID,
+                productId,
+                `gid://shopify/ProductVariant/${rawVariant.id}`
+              );
+            }
+
             console.log(`✅ Created new product on Soohi with ${variantsData.length} variant(s)`);
           } catch (err) {
             console.log("❌ Error creating new product on Soohi:", err.message);
@@ -238,7 +263,7 @@ app.post("/webhooks/leaf-product", async (req, res) => {
           if (!variant) continue;
 
           try {
-            await createVariantOnProduct(
+            const createdVariant = await createVariantOnProduct(
               process.env.SOOHI_SHOP,
               soohiToken,
               soohiProductId,
@@ -248,6 +273,23 @@ app.post("/webhooks/leaf-product", async (req, res) => {
               variant.inventory_quantity || 0,
               process.env.SOOHI_LOCATION_ID
             );
+
+            addSoohiMapping(
+              sku,
+              createdVariant.inventoryItem.id,
+              process.env.SOOHI_LOCATION_ID,
+              soohiProductId,
+              createdVariant.id
+            );
+
+            addLeafMapping(
+              sku,
+              `gid://shopify/InventoryItem/${variant.inventory_item_id}`,
+              process.env.LEAF_LOCATION_ID,
+              productId,
+              `gid://shopify/ProductVariant/${variant.id}`
+            );
+
             console.log(`✅ Created new variant on Soohi: ${sku}`);
           } catch (err) {
             console.log(`❌ Error creating variant ${sku} on Soohi:`, err.message);
@@ -341,12 +383,35 @@ app.post("/webhooks/soohi-product", async (req, res) => {
             sku: v.sku.trim().toUpperCase(),
             optionValue: v.option1,
             quantity: v.inventory_quantity || 0,
+            rawVariant: v,
           }));
 
         if (variantsData.length > 0) {
           try {
             const title = variantsData[0].sku;
-            await createNewProduct(process.env.LEAF_SHOP, leafToken, title, optionName, variantsData, process.env.LEAF_LOCATION_ID);
+            const result = await createNewProduct(process.env.LEAF_SHOP, leafToken, title, optionName, variantsData, process.env.LEAF_LOCATION_ID);
+
+            for (let i = 0; i < result.variants.length; i++) {
+              const sku = variantsData[i].sku;
+              const rawVariant = variantsData[i].rawVariant;
+
+              addLeafMapping(
+                sku,
+                result.variants[i].inventoryItem.id,
+                process.env.LEAF_LOCATION_ID,
+                result.productId,
+                result.variants[i].id
+              );
+
+              addSoohiMapping(
+                sku,
+                `gid://shopify/InventoryItem/${rawVariant.inventory_item_id}`,
+                process.env.SOOHI_LOCATION_ID,
+                productId,
+                `gid://shopify/ProductVariant/${rawVariant.id}`
+              );
+            }
+
             console.log(`✅ Created new product on Leaf with ${variantsData.length} variant(s)`);
           } catch (err) {
             console.log("❌ Error creating new product on Leaf:", err.message);
@@ -358,7 +423,7 @@ app.post("/webhooks/soohi-product", async (req, res) => {
           if (!variant) continue;
 
           try {
-            await createVariantOnProduct(
+            const createdVariant = await createVariantOnProduct(
               process.env.LEAF_SHOP,
               leafToken,
               leafProductId,
@@ -368,6 +433,23 @@ app.post("/webhooks/soohi-product", async (req, res) => {
               variant.inventory_quantity || 0,
               process.env.LEAF_LOCATION_ID
             );
+
+            addLeafMapping(
+              sku,
+              createdVariant.inventoryItem.id,
+              process.env.LEAF_LOCATION_ID,
+              leafProductId,
+              createdVariant.id
+            );
+
+            addSoohiMapping(
+              sku,
+              `gid://shopify/InventoryItem/${variant.inventory_item_id}`,
+              process.env.SOOHI_LOCATION_ID,
+              productId,
+              `gid://shopify/ProductVariant/${variant.id}`
+            );
+
             console.log(`✅ Created new variant on Leaf: ${sku}`);
           } catch (err) {
             console.log(`❌ Error creating variant ${sku} on Leaf:`, err.message);

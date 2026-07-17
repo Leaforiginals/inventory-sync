@@ -323,7 +323,7 @@ async function createNewProduct(shop, token, title, optionName, variantsData, lo
     );
   }
 
-  return newProductId;
+  return { productId: newProductId, variants: createdVariants };
 }
 
 module.exports = {
