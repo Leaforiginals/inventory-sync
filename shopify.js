@@ -233,6 +233,8 @@ async function createVariantOnProduct(shop, token, productId, optionName, option
 
 // ================================
 // Create a brand-new product with variants
+// (Shopify auto-creates a default ₹0 variant on productCreate — we find it
+// by matching option values, then update it with the correct SKU/price/qty)
 // ================================
 async function createNewProduct(shop, token, title, optionName, variantsData, locationId) {
   const productMutation = `
@@ -240,6 +242,20 @@ async function createNewProduct(shop, token, title, optionName, variantsData, lo
       productCreate(product: $product) {
         product {
           id
+          variants(first: 100) {
+            edges {
+              node {
+                id
+                selectedOptions {
+                  name
+                  value
+                }
+                inventoryItem {
+                  id
+                }
+              }
+            }
+          }
         }
         userErrors {
           field
@@ -273,15 +289,35 @@ async function createNewProduct(shop, token, title, optionName, variantsData, lo
   }
 
   const newProductId = productResponse.data.productCreate.product.id;
+  const autoVariants = productResponse.data.productCreate.product.variants.edges.map((e) => e.node);
 
-  const variantMutation = `
-    mutation productVariantsBulkCreate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkCreate(productId: $productId, variants: $variants) {
-        productVariants {
+  const bulkUpdateInput = [];
+  const matchedInfo = [];
+
+  for (const v of variantsData) {
+    const match = autoVariants.find((av) =>
+      av.selectedOptions.some((opt) => opt.name === optionName && opt.value === v.optionValue)
+    );
+    if (!match) continue;
+
+    bulkUpdateInput.push({
+      id: match.id,
+      price: "1.00",
+      inventoryItem: { sku: v.sku, tracked: true },
+    });
+    matchedInfo.push({
+      sku: v.sku,
+      quantity: v.quantity,
+      inventoryItemId: match.inventoryItem.id,
+      variantId: match.id,
+    });
+  }
+
+  const updateMutation = `
+    mutation productVariantsBulkUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+        product {
           id
-          inventoryItem {
-            id
-          }
         }
         userErrors {
           field
@@ -291,37 +327,28 @@ async function createNewProduct(shop, token, title, optionName, variantsData, lo
     }
   `;
 
-  const variantVariables = {
+  const updateResponse = await graphqlRequest(shop, token, updateMutation, {
     productId: newProductId,
-    variants: variantsData.map((v) => ({
-      price: "1.00",
-      optionValues: [{ optionName, name: v.optionValue }],
-      inventoryItem: { sku: v.sku, tracked: true },
-    })),
-  };
+    variants: bulkUpdateInput,
+  });
 
-  const variantResponse = await graphqlRequest(shop, token, variantMutation, variantVariables);
-
-  if (variantResponse.errors) {
-    throw new Error(variantResponse.errors.map((e) => e.message).join("\n"));
+  if (updateResponse.errors) {
+    throw new Error(updateResponse.errors.map((e) => e.message).join("\n"));
   }
 
-  const variantUserErrors = variantResponse.data?.productVariantsBulkCreate?.userErrors;
-  if (variantUserErrors && variantUserErrors.length > 0) {
-    throw new Error(variantUserErrors.map((e) => e.message).join("\n"));
+  const updateUserErrors = updateResponse.data?.productVariantsBulkUpdate?.userErrors;
+  if (updateUserErrors && updateUserErrors.length > 0) {
+    throw new Error(updateUserErrors.map((e) => e.message).join("\n"));
   }
 
-  const createdVariants = variantResponse.data.productVariantsBulkCreate.productVariants;
-
-  for (let i = 0; i < createdVariants.length; i++) {
-    await updateInventory(
-      shop,
-      token,
-      createdVariants[i].inventoryItem.id,
-      locationId,
-      variantsData[i].quantity
-    );
+  for (const info of matchedInfo) {
+    await updateInventory(shop, token, info.inventoryItemId, locationId, info.quantity);
   }
+
+  const createdVariants = matchedInfo.map((info) => ({
+    id: info.variantId,
+    inventoryItem: { id: info.inventoryItemId },
+  }));
 
   return { productId: newProductId, variants: createdVariants };
 }
